@@ -1,0 +1,79 @@
+#!/bin/bash
+set -e
+
+DISK="/dev/sda"
+EFI_PART="${DISK}1"
+ROOT_PART="${DISK}2"
+HOME_PART="${DISK}3"
+
+MNT_DIR="/mnt"
+
+HOSTNAME="archlinux"
+USERNAME="kunal"
+TIMEZONE="/usr/share/zoneinfo/Asia/Kolkata"
+
+LOCALE="en_US.UTF-8 UTF-8"
+LANG_CONF="LANG=en_US.UTF-8"
+
+echo "=== Formatting partitions ==="
+mkfs.fat -F32 "$EFI_PART"
+mkfs.ext4 -F "$ROOT_PART"
+mkfs.ext4 -F "$HOME_PART"
+
+echo "=== Mounting partitions ==="
+mount "$ROOT_PART" "$MNT_DIR"
+mkdir -p "$MNT_DIR/boot/efi"
+mount "$EFI_PART" "$MNT_DIR/boot/efi"
+mkdir -p "$MNT_DIR/home"
+mount "$HOME_PART" "$MNT_DIR/home"
+
+echo "=== Installing base system ==="
+pacstrap "$MNT_DIR" base linux-lts linux-lts-headers linux-firmware nano vim linux-firmware-qlogic \
+    grub efibootmgr networkmanager sudo \
+    base-devel nano vim git \
+    mesa vulkan-intel intel-media-driver libva-intel-driver libva-utils intel-media-sdk libvpl libvpl-tools \
+    niri wayland wayland-protocols \
+    xdg-desktop-portal-wlr xdg-desktop-portal-gtk xdg-desktop-portal-gnome \
+    pipewire pipewire-alsa pipewire-pulse wireplumber \
+    power-profiles-daemon
+
+echo "=== Generating fstab ==="
+genfstab -U "$MNT_DIR" >> "$MNT_DIR/etc/fstab"
+
+echo "=== Setting timezone ==="
+arch-chroot "$MNT_DIR" ln -sf "$TIMEZONE" /etc/localtime
+arch-chroot "$MNT_DIR" hwclock --systohc
+
+echo "=== Configuring locale ==="
+sed -i "s/#$LOCALE/$LOCALE/" "$MNT_DIR/etc/locale.gen"
+arch-chroot "$MNT_DIR" locale-gen
+echo "$LANG_CONF" > "$MNT_DIR/etc/locale.conf"
+
+echo "=== Setting hostname ==="
+echo "$HOSTNAME" > "$MNT_DIR/etc/hostname"
+echo "127.0.0.1 localhost" >> "$MNT_DIR/etc/hosts"
+echo "::1 localhost" >> "$MNT_DIR/etc/hosts"
+echo "127.0.1.1 $HOSTNAME.localdomain $HOSTNAME" >> "$MNT_DIR/etc/hosts"
+
+echo "=== Set root password ==="
+arch-chroot "$MNT_DIR" passwd
+
+echo "=== Creating user ==="
+arch-chroot "$MNT_DIR" useradd -m -G wheel,input,audio,video,sys,adm -s /bin/bash "$USERNAME"
+arch-chroot "$MNT_DIR" passwd "$USERNAME"
+echo "%wheel ALL=(ALL:ALL) ALL" >> "$MNT_DIR/etc/sudoers"
+
+echo "=== Installing GRUB (UEFI) ==="
+arch-chroot "$MNT_DIR" grub-install \
+    --target=x86_64-efi \
+    --efi-directory=/boot/efi \
+    --bootloader-id=GRUB
+
+arch-chroot "$MNT_DIR" grub-mkconfig -o /boot/grub/grub.cfg
+
+echo "=== Enabling services ==="
+arch-chroot "$MNT_DIR" systemctl enable NetworkManager
+arch-chroot "$MNT_DIR" systemctl enable power-profiles-daemon
+
+echo "=== Installation Complete ==="
+echo "Reboot and select Niri from GDM session menu."
